@@ -18,24 +18,24 @@ cd <repository-name>
 
 ---
 
-# Step 2: Create your branch (Only once)
+# Step 2: Create a separate branch for each feature , or just one single thats yours
 
-Replace `<your-name>` with your name.
+Replace `<feature-name>` with what you are updating or adding.
 
 ```bash
-git checkout -b <your-name>
+git checkout -b <feature-name>
 ```
 
 Example:
 
 ```bash
-git checkout -b yash
+git checkout -b ECM-pipeline
 ```
 
 Push your branch once:
 
 ```bash
-git push -u origin <your-name>
+git push -u origin <feature-name>
 ```
 
 ---
@@ -52,7 +52,7 @@ git pull origin main
 Now switch back to your branch.
 
 ```bash
-git checkout <your-name>
+git checkout <feature-name>
 ```
 
 Merge the latest changes from `main`.
@@ -85,7 +85,7 @@ git commit -m "Created API for authentication"
 # Step 5: Push your changes
 
 ```bash
-git push origin <your-name>
+git push origin <feature-name>
 ```
 
 ---
@@ -129,16 +129,6 @@ Create Pull Request
 * Don't force push (`git push --force`).
 * Don't delete someone else's branch.
 * Don't commit unfinished or broken code.
-
----
-
-# Branch Names
-
-| Team Member | Branch    |
-| ----------- | --------- |
-| Yash        | `yash`    |
-| Member 2    | `member2` |
-| Member 3    | `member3` |
 
 ---
 
