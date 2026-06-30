@@ -8,24 +8,6 @@ A research framework for estimating battery **State of Health (SOH)** and **Rema
 
 <img width="2064" height="2304" alt="pipeline_diagram" src="https://github.com/user-attachments/assets/e763ecfe-834e-4049-a29c-1dfb012d43f4" />
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 ## Table of Contents
 
 1. [Motivation](#1-motivation)
