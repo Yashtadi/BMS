@@ -6,7 +6,6 @@ A research framework for estimating battery **State of Health (SOH)** and **Rema
 
 ---
 
-<img width="2064" height="2304" alt="pipeline_diagram" src="https://github.com/user-attachments/assets/e763ecfe-834e-4049-a29c-1dfb012d43f4" />
 
 ## Table of Contents
 
@@ -73,21 +72,7 @@ The working dataset is `eis_cleaned.csv` — a long-format table where each row 
 
 ## 4. Pipeline Overview
 
-```
-EIS spectra ──▶ Validation (K–K) ──▶ ECM fit ──▶ Feature table ──▶ ML health model ──▶ SOH / RUL + confidence
-                                                                          │
-                                          new EIS (aged cell) ────────────┤
-                                                                          ▼
-                                                                  Drift score vs. threshold
-                                                                   │                 │
-                                                            under  │                 │  over
-                                                                   ▼                 ▼
-                                                              keep model      Self-Healing loop:
-                                                                              update ECM → update
-                                                                              evolution law → fine-tune
-                                                                              or retrain (cloud) →
-                                                                              push light model to edge
-```
+<img width="2064" height="2304" alt="pipeline_diagram" src="https://github.com/user-attachments/assets/e763ecfe-834e-4049-a29c-1dfb012d43f4" />
 
 A rendered version of this pipeline is in [`pipeline_diagram.png`](pipeline_diagram.png).
 
