@@ -2,10 +2,9 @@
 
 A research framework for estimating battery **State of Health (SOH)** and **Remaining Useful Life (RUL)** from **Electrochemical Impedance Spectroscopy (EIS)** measurements. Raw impedance spectra are first reduced to a small set of physically interpretable **Equivalent Circuit Model (ECM)** parameters. Those parameters — together with operating conditions — feed a machine-learning model that learns how battery health evolves and predicts SOH/RUL with a confidence estimate. A **drift-detection and self-healing (SHML) loop** keeps the deployed model accurate as cells age and the impedance signature shifts over time.
 
-> **Status:** Planning / research phase. This document describes the intended design. Components, model choices, and formulas are deliberately left open where a decision has not yet been made (see [Open Decisions](#open-decisions)). The framework is designed to be revisited and improved at every stage.
+> **Status:** Planning / research phase. This document describes the intended design. Components, model choices, and formulas are deliberately left open where a decision has not yet been made (see [Open Decisions](#12-open-decisions)). The framework is designed to be revisited and improved at every stage.
 
 ---
-
 
 ## Table of Contents
 
@@ -13,15 +12,16 @@ A research framework for estimating battery **State of Health (SOH)** and **Rema
 2. [Why EIS + ECM + ML](#2-why-eis--ecm--ml)
 3. [Dataset](#3-dataset)
 4. [Pipeline Overview](#4-pipeline-overview)
-5. [Stage 1 — Feature Extraction (EIS → ECM)](#5-stage-1--feature-extraction-eis--ecm)
-6. [Stage 2 — Health Model (ML)](#6-stage-2--health-model-ml)
-7. [Stage 3 — Drift Detection & Self-Healing Loop](#7-stage-3--drift-detection--self-healing-loop)
-8. [Drift Score](#8-drift-score)
-9. [Evaluation & Validation](#9-evaluation--validation)
-10. [Proposed Repository Structure](#10-proposed-repository-structure)
-11. [Open Decisions](#11-open-decisions)
-12. [Roadmap](#12-roadmap)
-13. [References](#13-references)
+5. [Stage 0 — Data Preparation](#5-stage-0--data-preparation)
+6. [Stage 1 — Feature Extraction (EIS → ECM)](#6-stage-1--feature-extraction-eis--ecm)
+7. [Stage 2 — Health Model (ML)](#7-stage-2--health-model-ml)
+8. [Stage 3 — Drift Detection & Self-Healing Loop](#8-stage-3--drift-detection--self-healing-loop)
+9. [Drift Score](#9-drift-score)
+10. [Evaluation & Validation](#10-evaluation--validation)
+11. [Proposed Repository Structure](#11-proposed-repository-structure)
+12. [Open Decisions](#12-open-decisions)
+13. [Roadmap](#13-roadmap)
+14. [References](#14-references)
 
 ---
 
@@ -46,122 +46,147 @@ This split keeps the inputs interpretable and the predictor flexible, which gene
 
 ## 3. Dataset
 
-The working dataset is `eis_cleaned.csv` — a long-format table where each row is one impedance point at one frequency for one measurement condition.
+The data comes from the **KIT comprehensive battery aging dataset** (RADAR4KIT, DOI `10.35097/1969`; published in *Scientific Data*, 2024 — *"Comprehensive battery aging dataset: capacity and impedance fade measurements of a lithium-ion NMC/C-SiO cell"*).
 
-| Column | Meaning |
-|---|---|
-| `source_file` | Identifier of the originating measurement file / cell campaign |
-| `freq_Hz` | Excitation frequency (Hz) |
-| `Z_real_mOhm` | Real part of impedance, Z′ (mΩ) |
-| `Z_imag_mOhm` | Imaginary part of impedance, Z″ (mΩ) |
-| `SoC_pct` | State of charge at measurement (%) |
-| `temp_degC` | Cell temperature (°C) |
-| `SoH_pct` | State of health label (%) |
-| `cycles` | Cycle index |
+**228 commercial LG INR18650HG2 cells** — NMC cathode, graphite + SiO anode, 3.0 Ah nominal — were aged for ~600 days under **76 parameter sets** (16 calendar, 48 cyclic, 12 driving-profile/WLTP aging), 3 replicate cells per set, across four temperatures (0 / 10 / 25 / 40 °C), three SoC windows, and varying charge/discharge rates. Roughly every three weeks each cell was paused for a standardized **check-up (CU)**: brought to room temperature, given a full capacity test, then stepped through SoC = 10/30/50/70/90 % with an EIS sweep + current-pulse at each stop (the **RT pass**); then returned to its operating temperature and the EIS + pulse sequence repeated at the same five SoC points (the **OT pass**). This is why every cell has a tight ~25 °C measurement cluster (RT) plus a cluster at its own native temperature (OT).
 
-**Observed characteristics (from profiling the file):**
+Working file in hand: `eis_cleaned.csv` (long format, one row per frequency point).
 
-- **~216** distinct measurement sources (`source_file` groups).
-- **28** frequencies per sweep, spanning **0.05 Hz – 10 kHz** (mHz diffusion tail through kHz ohmic/inductive region).
-- **SoC** sampled at five levels: **10, 30, 50, 70, 90 %**.
-- **Temperature** spans roughly **0 °C – 41 °C** (continuous, not gridded).
-- **SoH** ranges from about **7 % to 112 %**. Values above 100 % and the wide spread indicate measurement noise and/or augmentation; the label is effectively continuous and will need cleaning/clipping.
-- The `cycles` column currently contains only a narrow range of values and is **not** a reliable cycle counter; SoH is the primary health label.
+| Column | Unit | Meaning |
+|---|---|---|
+| `source_file` | — | Cell fingerprint: `P###` (recipe 1–72) `_#` (replicate 1–3) `S##` (board 1–19) `C##` (channel 0–11). One combination = one physical cell — **the grouping key for all splits**. |
+| `freq_Hz` | Hz | Test frequency for this row. |
+| `Z_real_mOhm` | mΩ | Real part Z′, temperature/hardware-**compensated** (official `z_re_comp_mOhm`). |
+| `Z_imag_mOhm` | mΩ | Imaginary part Z″, compensated (`z_im_comp_mOhm`). |
+| `SoC_pct` | % | One of the five checkpoints (10/30/50/70/90). |
+| `temp_degC` | °C | Actual measured temperature during the spectrum (with real-hardware noise/self-heating). |
+| `SoH_pct` | % | **Impedance-based SOH, reset to 100 % at the first valid CU for each (SoC, temperature) condition** (0 % ⇔ impedance tripled). |
+| `cycles` | — | **`is_rt` flag**: 1 = RT pass, 0 = OT pass. Not a cycle count. |
 
-> **Notes / caveats to resolve during data prep:** the file is at the ~1,048,575-row spreadsheet limit, so it may be truncated at the source — verify completeness. SoH > 100 % must be handled (clip or treat as noise). Per-cell grouping must be defined precisely from `source_file` (pack / cell / slot / channel encoding in the name) so that train/test splits never leak across the same physical cell.
+**Verified against the file (profiling confirms your understanding):**
+
+- 216 cells = 72 recipes × 3 replicates; the `source_file` decode is exactly `P`(1–72)/replicate(1–3)/`S`(1–19)/`C`(0–11).
+- 28 frequencies per sweep, 0.05 Hz – 10 kHz.
+- `cycles` is the RT/OT flag: RT pass measures 25.1 ± 0.5 °C; OT pass clusters at 0 / 10 / 25 / 40 °C (the four oil-bath setpoints), confirming four temperatures.
+- `SoH_pct` per-condition reset holds: the per-(cell, SoC, RT) maximum is ≈ 100 %, declining to ~74 % median minimum — and values > 100 % are valid by design (impedance can transiently dip below its own reference), not data errors.
+
+**Three caveats that materially change how the plan must proceed** (handled in [Stage 0](#5-stage-0--data-preparation)):
+
+1. **The cleaned CSV is truncated.** It sits at exactly **1,048,575 rows — the Excel row cap** — and contains **216 of 228 cells (72 of 76 recipes)**; ~4 recipes / 12 cells are missing. Regenerate the cleaned dataset directly from the raw KIT files (`…/10.35097-1969/data/dataset`) to Parquet or an uncapped CSV before serious modelling, and check *which* recipes were lost so the aging-regime / temperature balance isn't skewed.
+2. **There is no time / age axis in this file.** It carries no check-up index, timestamp, equivalent-cycle, or Ah-throughput column. The ageing trajectory is only *implicit* — each (cell, SoC, pass) holds up to ~31 repeated check-ups (median ~16) with declining SoH, but they **cannot be ordered in time from this file alone**. RUL and any "evolution over time" therefore require pulling the **CU index / equivalent full cycles / date** from the raw dataset.
+3. **The recipe (aging) metadata is not in this file.** Aging type (calendar / cyclic / profile), operating-temperature setpoint, SoC window, and C-rates — the variables that explain *why* a cell degrades and that the evolution-law and drift logic depend on — live in the dataset's **parameter table keyed by `P`-code** and must be joined in.
+
+**Is the current understanding "enough"?** It is an accurate and unusually thorough qualitative picture. It is **not yet quantitatively sufficient** for modelling on three points: the missing **time axis**, the missing **per-recipe condition metadata**, and the **choice of health target** (see [§7](#7-stage-2--health-model-ml)). Resolve those in Stage 0 before training.
 
 ## 4. Pipeline Overview
 
 <img width="2064" height="2304" alt="pipeline_diagram" src="https://github.com/user-attachments/assets/e763ecfe-834e-4049-a29c-1dfb012d43f4" />
-
 A rendered version of this pipeline is in [`pipeline_diagram.png`](pipeline_diagram.png).
 
-## 5. Stage 1 — Feature Extraction (EIS → ECM)
+## 5. Stage 0 — Data Preparation
 
-Each spectrum (one cell, one SoC, one temperature, one age state) is processed as follows.
+This stage exists because of the three dataset caveats above; do not skip it.
 
-**5.1 Validate first (Kramers–Kronig).** EIS assumes the system is linear, causal, stable, and time-invariant during the sweep. Low-frequency points take a long time to acquire, during which a cell can drift, invalidating the spectrum. A Kramers–Kronig consistency check is run before fitting; spectra with large systematic residuals are flagged or rejected so that bad data never reaches the model.
+1. **Regenerate an uncapped dataset.** Rebuild the cleaned table from the raw KIT files to Parquet (or chunked CSV) so all **228 cells / 76 recipes** are present, not the Excel-truncated 216/72. Diff against `eis_cleaned.csv` to confirm which recipes were missing.
+2. **Reconstruct the time/age axis.** Bring in the **check-up index** (and, where available, calendar date, equivalent full cycles, and Ah-throughput) per spectrum. This is what makes ageing *orderable* and RUL definable.
+3. **Join recipe metadata.** Attach, per `P`-code: aging type (calendar/cyclic/profile), temperature setpoint, SoC window, and C-rates. These become conditioning variables for the model and natural axes for drift analysis.
+4. **Choose the health target.** Decide between the file's impedance-based `SoH_pct` and the **capacity-based SOH** from each CU's full capacity test (see [§7](#7-stage-2--health-model-ml) — there is a circularity concern with predicting impedance-SOH from impedance features).
+5. **Clean labels and define grouping.** Handle `SoH_pct` > 100 % (keep as valid by default), set the per-cell grouping key, and record the RT-vs-OT pass choice for features.
 
-**5.2 Fit an Equivalent Circuit Model.** A Randles-type circuit is fit to each validated spectrum to extract interpretable parameters. The exact circuit topology depends on the cell chemistry and is an [open decision](#open-decisions); the canonical starting point is:
+## 6. Stage 1 — Feature Extraction (EIS → ECM)
+
+Each spectrum (one cell, one SoC, one pass, one check-up) is processed as follows.
+
+**6.1 Validate first (Kramers–Kronig).** EIS assumes the system is linear, causal, stable, and time-invariant during the sweep. Low-frequency points take a long time to acquire, during which a cell can drift, invalidating the spectrum. A Kramers–Kronig consistency check is run before fitting; spectra with large systematic residuals are flagged or rejected so that bad data never reaches the model.
+
+**6.2 Fit an Equivalent Circuit Model.** A Randles-type circuit is fit to each validated spectrum. Because the chemistry is now known (NMC / graphite-SiO 18650), a concrete starting topology is recommended (see [Open Decision 1](#12-open-decisions)):
 
 ```
-R_ohm  +  ( R_ct ∥ CPE )  +  Warburg
+L  +  R_ohm  +  ( R_ct ∥ CPE )  +  Warburg                         # baseline
+L  +  R_ohm  +  ( R_sf ∥ CPE_sf ) + ( R_ct ∥ CPE_dl ) + Warburg    # if a surface-film/SEI arc resolves
 ```
 
-**5.3 Extracted features.** The following are computed per spectrum and become the model inputs:
+The series inductance `L` accounts for the high-frequency inductive tail visible in the data (Z″ < 0 at kHz). Use DRT to decide how many R∥CPE arcs the spectra actually justify before committing.
+
+**6.3 Extracted features.** Computed per spectrum and used as model inputs:
 
 | Feature | Symbol | Physical meaning |
 |---|---|---|
 | Ohmic resistance | `R_ohm` | High-frequency real-axis intercept — electrolyte, contacts, current collectors. Grows with ageing. |
-| Charge-transfer resistance | `R_ct` | Mid-frequency semicircle diameter — kinetics of the electrode reaction. Grows as the interface degrades. |
+| Charge-transfer resistance | `R_ct` | Mid-frequency semicircle diameter — electrode-reaction kinetics. Grows as the interface degrades. |
 | CPE exponent | `n` (and magnitude `Q`) | Depression of the semicircle — surface inhomogeneity / roughness of the double layer. |
-| Health deviation | `ΔZ = Z_healthy − Z_measured` | Per-frequency (and aggregated) deviation of the present spectrum from a fresh-cell baseline. A direct, physics-anchored health signal that teaches the model what "moving away from healthy" looks like. |
+| Health deviation | `ΔZ = Z_healthy − Z_measured` | Per-frequency (and aggregated) deviation of the present spectrum from a fresh-cell baseline. A direct, physics-anchored health signal. |
 | Warburg coefficient | `σ` (optional) | Low-frequency diffusion behaviour (~45° tail) — solid-state/electrolyte transport. |
 
-Operating conditions (`SoC_pct`, `temp_degC`) are carried alongside these features, because impedance depends strongly on both and they must be conditioned on, never ignored.
+Operating conditions (`SoC_pct`, `temp_degC`) are carried alongside, because impedance depends strongly on both.
 
-**On ΔZ:** a healthy-cell reference spectrum is needed per (SoC, temperature) operating point so that `ΔZ` compares like with like. How the healthy baseline is defined (first measurement per cell, a fitted nominal model, or a population reference) is a design choice to settle during implementation.
+**On ΔZ:** define the healthy reference as the **first valid check-up for the same (cell, SoC, pass)** — this matches the dataset's own per-condition SoH reset, so `ΔZ` and `SoH_pct` share a consistent baseline. Prefer the **RT pass** (all cells at ~25 °C) when comparing features *across* cells, since it removes the operating-temperature confound; use OT-pass features when modelling native-temperature behaviour explicitly.
 
-## 6. Stage 2 — Health Model (ML)
+## 7. Stage 2 — Health Model (ML)
 
-The ML model consumes the ECM feature table plus operating conditions and learns:
+The model maps `[ECM features + SoC + temp + (aging metadata)] → SOH` (and RUL vs. an end-of-life threshold) **with a confidence estimate**.
 
-- **The evolution law** — how the features (and `ΔZ`) move as SOH, SOC, and temperature change.
-- **A predictor** — mapping the current feature vector to **SOH** (and, by extension, **RUL** against an end-of-life threshold).
-- **A confidence estimate** — a prediction interval or variance accompanying each point estimate.
+> **Pick the health target deliberately (circularity warning).** `SoH_pct` in the file is *derived from impedance*. Extracting ECM features from the same impedance and predicting impedance-SOH is partly circular — the model would be predicting a function of its own inputs and can look deceptively accurate. The more meaningful prognostic target is the **measured capacity fade** from each check-up's full capacity test (available in the raw dataset). Recommended: **train against capacity-based SOH, use EIS-derived ECM features as predictors**; keep impedance-based `SoH_pct` as a secondary/sanity target at most.
 
-The specific algorithm is an [open decision](#open-decisions). Tree ensembles (XGBoost / LightGBM / Random Forest) are strong, fast baselines on tabular impedance features and pair naturally with feature-importance attribution; models with native uncertainty (quantile/ensemble methods, Gaussian processes) are attractive because confidence is a first-class requirement here.
+Build order:
 
-**Physical plausibility constraints** the model output should respect: SOH should be (near-)monotonically non-increasing over a cell's life apart from measurement noise; resistance features should grow or hold, not spontaneously drop; and uncertainty should widen for inputs that fall outside the training distribution (new temperature, new age regime).
+1. **No-leakage split first** (leave-one-cell-out; additionally hold out by **aging regime** and **temperature** to test robustness across conditions).
+2. **Baseline model.** Start simple and interpretable (tree ensemble — XGBoost/LightGBM/RF — on the tabular feature table). Model family is an [open decision](#12-open-decisions).
+3. **Uncertainty.** Add prediction intervals / variance (quantile, ensemble, or a UQ-native model). Confidence is a first-class requirement.
+4. **Attribution.** Use feature importance / SHAP to confirm the model leans on physically meaningful features (`R_ct`, `ΔZ`, `R_ohm`), not artifacts.
 
-## 7. Stage 3 — Drift Detection & Self-Healing Loop
+Outputs must respect physics: SOH near-monotonic non-increasing over life; resistances grow/hold; uncertainty widens out-of-distribution.
+
+## 8. Stage 3 — Drift Detection & Self-Healing Loop
 
 A model trained today will eventually face cells whose impedance signature has drifted beyond what it has seen. The system detects this and repairs itself rather than silently degrading.
 
-**7.1 Generate new EIS.** For research purposes, a *new* EIS dataset is synthesised representing a cell after additional months of use. The synthesis method is an [open decision](#open-decisions) — candidates include perturbing ECM parameters along known ageing trends, physics-based impedance simulation, or augmentation of measured spectra.
+**8.1 Source the "aged" EIS.** This dataset already spans ~600 days of repeated check-ups, so the *"cell aged a few months later"* spectra are **real, not synthetic** — later-CU spectra of the same cells (or held-out late-life recipes) can serve directly as the drift test set. Synthetic generation becomes *optional*, for stress-testing beyond the observed range (see [Open Decision 3](#12-open-decisions)).
 
-**7.2 Re-extract parameters.** The new spectra are passed through the same Stage 1 pipeline to produce a new ECM feature set (new `R_ohm`, `R_ct`, `ΔZ`, CPE exponent, etc.).
+**8.2 Re-extract parameters.** New spectra pass through the same Stage 1 pipeline to produce a new ECM feature set (new `R_ohm`, `R_ct`, `ΔZ`, CPE exponent, etc.).
 
-**7.3 Compute a drift score.** The shift of the ECM parameters (and/or model residuals) relative to the reference distribution is quantified as a single **drift score** (see [Drift Score](#8-drift-score)).
+**8.3 Compute a drift score** quantifying the shift of ECM parameters (and/or model residuals) relative to the reference distribution (see [Drift Score](#9-drift-score)).
 
-**7.4 Compare to threshold and act:**
+**8.4 Compare to threshold and act:**
 
-- **Drift score < threshold** → distribution is stable; keep the current model in service.
+- **Drift score < threshold** → distribution stable; keep the current model.
 - **Drift score ≥ threshold** → enter the **Self-Healing (SHML) loop**:
   1. **Update ECM parameters** for the new operating regime.
   2. **Update the evolution laws** the model relies on.
-  3. **Fine-tune or fully retrain** in the cloud — fine-tune for mild drift, full retrain for severe drift, with the cut-off governed by the drift score magnitude.
+  3. **Fine-tune or fully retrain** in the cloud — fine-tune for mild drift, full retrain for severe drift, cut-off governed by the drift-score magnitude.
   4. **Deploy a lightweight model back to the edge** device, replacing the previous version.
 
-This mirrors the **Self-Healing Machine Learning** pattern: autonomously detect degradation, diagnose its severity, choose a remediation proportional to the damage, and adapt — with the heavy training in the cloud and a compact model running on-device.
+This mirrors the **Self-Healing Machine Learning** pattern: autonomously detect degradation, diagnose its severity, choose a remediation proportional to the damage, and adapt — heavy training in the cloud, a compact model on-device.
 
-## 8. Drift Score
+## 9. Drift Score
 
-The drift score reduces "how far have the parameters moved?" to one comparable number. The exact formula is an [open decision](#open-decisions); the leading candidates, all of which fit this framework, are:
+The drift score reduces "how far have the parameters moved?" to one comparable number. The exact formula is an [open decision](#12-open-decisions); leading candidates that fit this framework:
 
-- **Population Stability Index (PSI)** — bins a feature's distribution now vs. baseline and sums the relative-entropy contribution. Common reading: `< 0.1` no meaningful shift, `0.1–0.25` moderate, `> 0.25` significant. Simple and interpretable per feature.
-- **KL divergence** — relative entropy of the new parameter distribution against the baseline (PSI is essentially a symmetrised, binned KL).
-- **Mahalanobis distance** — distance of the new ECM parameter vector from the healthy/baseline parameter cloud, accounting for feature covariance. Naturally produces a single multivariate score with a statistical threshold.
-- **Normalised parameter drift** — a weighted sum of per-parameter relative changes, e.g. `Σ wᵢ · |θᵢ − θᵢ⁰| / |θᵢ⁰|`, easy to interpret and to map onto fine-tune vs. retrain bands.
-- **Sequential detectors (Page–Hinkley / ADWIN)** — run on the stream of model residuals to raise a discrete drift alarm rather than a static comparison; useful for continuous online monitoring.
+- **Population Stability Index (PSI)** — bins a feature's distribution now vs. baseline and sums the relative-entropy contribution. Common reading: `< 0.1` no meaningful shift, `0.1–0.25` moderate, `> 0.25` significant.
+- **KL divergence** — relative entropy of the new parameter distribution against baseline (PSI is essentially a symmetrised, binned KL).
+- **Mahalanobis distance** — distance of the new ECM parameter vector from the healthy/baseline cloud, covariance-aware; a clean single multivariate score with a statistical threshold.
+- **Normalised parameter drift** — a weighted sum of per-parameter relative changes, e.g. `Σ wᵢ · |θᵢ − θᵢ⁰| / |θᵢ⁰|`; easy to map onto fine-tune vs. retrain bands.
+- **Sequential detectors (Page–Hinkley / ADWIN)** — run on the stream of model residuals to raise a discrete alarm; useful for continuous online monitoring.
 
-A practical design is to combine a **two-band threshold** on the chosen score: a lower band that triggers fine-tuning and an upper band that triggers full retraining.
+A practical design uses a **two-band threshold**: a lower band that triggers fine-tuning and an upper band that triggers full retraining.
 
-## 9. Evaluation & Validation
+## 10. Evaluation & Validation
 
-- **No-leakage splits.** Group by physical cell (leave-one-cell-out) and, where possible, leave-one-condition-out. Never use random row splits — adjacent rows from the same sweep/cell leak health information.
-- **Metrics.** Report SOH/RUL error (MAE/RMSE) *with* prediction-interval coverage and calibration, plus mean ± std across folds/seeds, not a single split.
+- **No-leakage splits.** Group by physical cell (leave-one-cell-out); additionally hold out by aging regime and temperature. Never random-split rows of a sweep/cell.
+- **Metrics.** Report SOH/RUL error (MAE/RMSE) *with* prediction-interval coverage and calibration; mean ± std across folds/seeds, not a single split.
 - **Plausibility checks.** Verify monotonic SOH, non-decreasing resistance, and that uncertainty grows out-of-distribution before trusting any number.
-- **Drift-loop validation.** Confirm the drift score rises on the synthesised aged data and that fine-tune/retrain recovers accuracy on the shifted distribution.
+- **Drift-loop validation.** Confirm the drift score rises on later-life / out-of-regime data and that fine-tune/retrain recovers accuracy on the shifted distribution.
 
-## 10. Proposed Repository Structure
+## 11. Proposed Repository Structure
 
 ```
 .
 ├── data/
-│   ├── raw/                  # original EIS exports
-│   └── eis_cleaned.csv       # working dataset
+│   ├── raw/                  # original KIT export (10.35097-1969)
+│   ├── interim/              # uncapped, time-indexed, metadata-joined table
+│   └── eis_cleaned.csv       # current (truncated) working file
 ├── src/
+│   ├── prep/                 # Stage 0: regenerate, time axis, metadata join, target
 │   ├── validation/           # Kramers–Kronig checks
 │   ├── ecm/                  # circuit fitting & feature extraction
 │   ├── features/             # ΔZ baselines, feature assembly
@@ -175,34 +200,36 @@ A practical design is to combine a **two-band threshold** on the chosen score: a
 └── README.md
 ```
 
-## 11. Open Decisions
+## 12. Open Decisions
 
-These choices are **not yet made** and are expected to evolve. They are tracked here so the design stays honest about what is settled and what is not.
+These choices are **not yet final** and are expected to evolve. Tracked here so the design stays honest about what is settled and what is not.
 
-1. **Which ECM circuit?** The exact equivalent circuit depends on the cell chemistry, which in turn depends on the chemistry of the cells in this dataset. The chemistry must be identified (or assumed and stated) before the circuit topology — Randles, Randles + second R∥CPE for SEI, with/without inductance, finite vs. semi-infinite Warburg — can be fixed.
-2. **Which ML model for SOH?** Candidate predictors include XGBoost, Random Forest, LightGBM, and uncertainty-native alternatives. Selection should weigh accuracy, calibrated confidence, and edge-deployability.
-3. **How is the new EIS synthesised?** The method for generating post-ageing spectra (parameter perturbation along ageing trends, physics-based simulation, or measured-spectrum augmentation) is undecided and affects how convincingly the drift loop can be validated.
-4. **What formula for the drift score?** PSI, KL divergence, Mahalanobis distance, normalised parameter drift, or a sequential detector — and the threshold band(s) that separate "keep", "fine-tune", and "retrain" — are open.
+1. **Which ECM circuit?** Chemistry is now **known** (NMC / graphite-SiO, LG INR18650HG2). Recommended starting point: `L + R_ohm + (R_ct ∥ CPE) + Warburg`, with an optional second `R∥CPE` for the surface-film/SEI arc if DRT shows it resolves. Still to confirm: number of arcs, Warburg type (semi-infinite vs. finite-length), and whether the SEI branch is identifiable at all SoC/temperature points.
+2. **Which ML model for SOH?** XGBoost / Random Forest / LightGBM / UQ-native alternatives. Weigh accuracy, calibrated confidence, and edge-deployability.
+3. **How is the "aged" EIS obtained?** The dataset's own later check-ups provide **real** aged spectra, so the primary path is to use held-out late-life data rather than synthesise. Still open: whether (and how) to *additionally* synthesise out-of-range spectra — parameter perturbation along ageing trends, physics-based impedance simulation, or measured-spectrum augmentation — to stress-test the drift loop.
+4. **What formula for the drift score?** PSI / KL / Mahalanobis / normalised drift / sequential detector, plus the threshold band(s) separating keep / fine-tune / retrain.
 
-## 12. Roadmap
+## 13. Roadmap
 
 The framework is explicitly **iterative**. Expected progression:
 
-1. Data preparation and per-cell grouping; SoH cleaning.
+0. **Data prep** — regenerate the uncapped dataset, reconstruct the time/age axis, join recipe metadata, choose the health target.
+1. Per-cell grouping and label cleaning.
 2. K–K validation + ECM fitting; baseline feature table.
 3. First health model with uncertainty; no-leakage evaluation.
-4. Drift score implementation and threshold calibration on synthesised aged data.
+4. Drift score implementation and threshold calibration on real later-life data.
 5. Self-healing loop (fine-tune/retrain trigger + edge export).
 6. Iterate: revisit circuit topology, features, model family, drift score, and thresholds as results come in.
 
 Every stage above is a candidate for improvement; the architecture is meant to be refined repeatedly rather than frozen after a first pass.
 
-## 13. References
+## 14. References
 
-- EIS interpretation, ECM fitting, and EIS-based ML — domain notes compiled for this project.
-- Equivalent-circuit modelling of commercial Li-ion cells: <https://pmc.ncbi.nlm.nih.gov/articles/PMC7671193/>
-- Guide to equivalent-circuit fitting for impedance and battery state estimation: <https://www.sciencedirect.com/science/article/pii/S2352152X2303788X>
-- Concept-drift detection methods overview: <https://ai-infrastructure.org/8-concept-drift-detection-methods/>
-- KL-divergence drift detection: <https://link.springer.com/article/10.1007/s42488-024-00119-y>
-- Self-Healing Machine Learning framework: <https://proceedings.neurips.cc/paper_files/paper/2024/file/4a86ec12e94ef1fe306362e7bdcd5894-Paper-Conference.pdf>
-- ML-based digital twin for EV battery modelling (edge–cloud retraining): <https://arxiv.org/pdf/2206.08080>
+- KIT comprehensive battery aging dataset (*Scientific Data*, 2024) — <https://www.nature.com/articles/s41597-024-03831-x>
+- Dataset record (RADAR4KIT) — <https://radar.kit.edu/radar/en/dataset/kww7jv8ajuvchcah>
+- Equivalent-circuit modelling of commercial Li-ion cells — <https://pmc.ncbi.nlm.nih.gov/articles/PMC7671193/>
+- Guide to equivalent-circuit fitting for impedance & battery state estimation — <https://www.sciencedirect.com/science/article/pii/S2352152X2303788X>
+- Concept-drift detection methods overview — <https://ai-infrastructure.org/8-concept-drift-detection-methods/>
+- KL-divergence drift detection — <https://link.springer.com/article/10.1007/s42488-024-00119-y>
+- Self-Healing Machine Learning framework — <https://proceedings.neurips.cc/paper_files/paper/2024/file/4a86ec12e94ef1fe306362e7bdcd5894-Paper-Conference.pdf>
+- ML-based digital twin for EV battery modelling (edge–cloud retraining) — <https://arxiv.org/pdf/2206.08080>
