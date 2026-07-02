@@ -50,10 +50,17 @@ The data comes from the **KIT comprehensive battery aging dataset** (RADAR4KIT, 
 
 **228 commercial LG INR18650HG2 cells** — NMC cathode, graphite + SiO anode, 3.0 Ah nominal — were aged for ~600 days under **76 parameter sets** (16 calendar, 48 cyclic, 12 driving-profile/WLTP aging), 3 replicate cells per set, across four temperatures (0 / 10 / 25 / 40 °C), three SoC windows, and varying charge/discharge rates. Roughly every three weeks each cell was paused for a standardized **check-up (CU)**: brought to room temperature, given a full capacity test, then stepped through SoC = 10/30/50/70/90 % with an EIS sweep + current-pulse at each stop (the **RT pass**); then returned to its operating temperature and the EIS + pulse sequence repeated at the same five SoC points (the **OT pass**). This is why every cell has a tight ~25 °C measurement cluster (RT) plus a cluster at its own native temperature (OT).
 
-Working file in hand: `eis_cleaned.csv` (long format, one row per frequency point).
+### The three "lifestyles" (aging types)
+Every cell falls into one of three regimes, and this is the single most important thing to know about any given cell, because it explains why it's degrading:
+**1) Calendar aging (16 of the 76 groups)** — the cell just sits there, held at a constant voltage (constant SoC), at one of four temperatures. No cycling at all between check-ups. This simulates a battery sitting in storage or barely used. The stress factors here are purely temperature and how charged the cell is kept.
+**2) Cyclic aging (48 of the 76 groups, the largest chunk)** — the cell is continuously charged and discharged back and forth between two SoC limits (e.g., 0–100%, or 10–90%), at a chosen charge rate and discharge rate, at one of four temperatures. This simulates a battery in constant heavy use.
+**3) Profile aging (12 of the 76 groups)** — instead of a simple back-and-forth, the cell is discharged following a real driving-cycle power profile (WLTP — the standard European driving test cycle used for EV range testing), then recharged. This simulates an EV battery in actual use.
+Every group also gets one of four temperatures: 0°C, 10°C, 25°C, 40°C — these are physically four separate temperature-controlled oil baths ("pools") the cells sit in.
 
-| Column | Unit | Meaning |
-|---|---|---|
+### What happens during a check-up (CU)
+Roughly every three weeks, a cell's regular charge/discharge routine is paused, and it goes through a standardized health check, always in the same order: first its temperature is brought to room temperature (RT, ~25°C) regardless of what temperature it normally lives at; then its capacity is measured with one full 0→100→0% charge-discharge; then, staying at RT, it's stepped up through SoC = 10%, 30%, 50%, 70%, 90%, and at each stop an EIS measurement (impedance spectrum) plus a current-pulse test is taken. Once that's done, the cell is brought back to its real operating temperature (OT — 0, 10, 25, or 40°C, whichever it normally lives at), and the same EIS + pulse test sequence is repeated at the same five SoC points, but now sweeping back down 90→70→50→30→10%. Only after both passes are done does the cell resume its normal aging routine. This is why every cell, no matter its real living temperature, has a cluster of measurements at a tight ~25°C (the RT pass) and a separate cluster at its own native temperature (the OT pass) — exactly the pattern that showed up in your data as the cycles/is_rt flag.
+
+
 | `source_file` | — | Cell fingerprint: `P###` (recipe 1–72) `_#` (replicate 1–3) `S##` (board 1–19) `C##` (channel 0–11). One combination = one physical cell — **the grouping key for all splits**. |
 | `freq_Hz` | Hz | Test frequency for this row. |
 | `Z_real_mOhm` | mΩ | Real part Z′, temperature/hardware-**compensated** (official `z_re_comp_mOhm`). |
@@ -64,19 +71,6 @@ Working file in hand: `eis_cleaned.csv` (long format, one row per frequency poin
 | `cycles` | — | **`is_rt` flag**: 1 = RT pass, 0 = OT pass. Not a cycle count. |
 
 **Verified against the file (profiling confirms your understanding):**
-
-- 216 cells = 72 recipes × 3 replicates; the `source_file` decode is exactly `P`(1–72)/replicate(1–3)/`S`(1–19)/`C`(0–11).
-- 28 frequencies per sweep, 0.05 Hz – 10 kHz.
-- `cycles` is the RT/OT flag: RT pass measures 25.1 ± 0.5 °C; OT pass clusters at 0 / 10 / 25 / 40 °C (the four oil-bath setpoints), confirming four temperatures.
-- `SoH_pct` per-condition reset holds: the per-(cell, SoC, RT) maximum is ≈ 100 %, declining to ~74 % median minimum — and values > 100 % are valid by design (impedance can transiently dip below its own reference), not data errors.
-
-**Three caveats that materially change how the plan must proceed** (handled in [Stage 0](#5-stage-0--data-preparation)):
-
-1. **The cleaned CSV is truncated.** It sits at exactly **1,048,575 rows — the Excel row cap** — and contains **216 of 228 cells (72 of 76 recipes)**; ~4 recipes / 12 cells are missing. Regenerate the cleaned dataset directly from the raw KIT files (`…/10.35097-1969/data/dataset`) to Parquet or an uncapped CSV before serious modelling, and check *which* recipes were lost so the aging-regime / temperature balance isn't skewed.
-2. **There is no time / age axis in this file.** It carries no check-up index, timestamp, equivalent-cycle, or Ah-throughput column. The ageing trajectory is only *implicit* — each (cell, SoC, pass) holds up to ~31 repeated check-ups (median ~16) with declining SoH, but they **cannot be ordered in time from this file alone**. RUL and any "evolution over time" therefore require pulling the **CU index / equivalent full cycles / date** from the raw dataset.
-3. **The recipe (aging) metadata is not in this file.** Aging type (calendar / cyclic / profile), operating-temperature setpoint, SoC window, and C-rates — the variables that explain *why* a cell degrades and that the evolution-law and drift logic depend on — live in the dataset's **parameter table keyed by `P`-code** and must be joined in.
-
-**Is the current understanding "enough"?** It is an accurate and unusually thorough qualitative picture. It is **not yet quantitatively sufficient** for modelling on three points: the missing **time axis**, the missing **per-recipe condition metadata**, and the **choice of health target** (see [§7](#7-stage-2--health-model-ml)). Resolve those in Stage 0 before training.
 
 ## 4. Pipeline Overview
 
