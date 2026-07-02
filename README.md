@@ -2,7 +2,9 @@
 
 A research framework for estimating battery **State of Health (SOH)** and **Remaining Useful Life (RUL)** from **Electrochemical Impedance Spectroscopy (EIS)** measurements. Raw impedance spectra are first reduced to a small set of physically interpretable **Equivalent Circuit Model (ECM)** parameters. Those parameters — together with operating conditions — feed a machine-learning model that learns how battery health evolves and predicts SOH/RUL with a confidence estimate. A **drift-detection and self-healing (SHML) loop** keeps the deployed model accurate as cells age and the impedance signature shifts over time.
 
-> **Status:** Planning / research phase. This document describes the intended design. Components, model choices, and formulas are deliberately left open where a decision has not yet been made (see [Open Decisions](#12-open-decisions)). The framework is designed to be revisited and improved at every stage.
+> **Status:** **Stage 0 (data preparation) is complete** — the raw KIT dataset has been rebuilt into a clean, uncapped, time-indexed, metadata-joined, capacity-labeled table (`data/interim/eis_labeled.parquet`). **Stage 1 (ECM feature extraction) is next.** Downstream components, model choices, and formulas are deliberately left open where a decision has not yet been made (see [Open Decisions](#11-open-decisions)). The framework is designed to be revisited and improved at every stage.
+>
+> 📄 For the full, step-by-step account of the data work — every decision and the evidence behind it — see [`data_exploration.md`](data_exploration.md).
 
 ---
 
@@ -18,10 +20,9 @@ A research framework for estimating battery **State of Health (SOH)** and **Rema
 8. [Stage 3 — Drift Detection & Self-Healing Loop](#8-stage-3--drift-detection--self-healing-loop)
 9. [Drift Score](#9-drift-score)
 10. [Evaluation & Validation](#10-evaluation--validation)
-11. [Proposed Repository Structure](#11-proposed-repository-structure)
-12. [Open Decisions](#12-open-decisions)
-13. [Roadmap](#13-roadmap)
-14. [References](#14-references)
+11. [Open Decisions](#11-open-decisions)
+12. [Roadmap](#12-roadmap)
+13. [References](#13-references)
 
 ---
 
@@ -72,6 +73,40 @@ Roughly every three weeks, a cell's regular charge/discharge routine is paused, 
 
 **Verified against the file (profiling confirms your understanding):**
 
+### Stage 0 output — the working dataset
+
+The original teammate-cleaned `eis_cleaned.csv` was **discarded**: it had been truncated at the Excel
+1,048,575-row cap (only 216 of 228 cells) and stripped of most useful columns. We rebuilt everything
+from the raw KIT files into **`data/interim/eis_labeled.parquet`** — the single working dataset for all
+downstream stages. **One row = one frequency point of one clean spectrum.**
+
+- **228 cells** (Calendar 48 / Cyclic 144 / Profile 36) · **39,368 spectra** · **1,102,304 rows** · 28 frequency points per spectrum.
+- **Reconstructed time axis** (`cu_index`, 0–28) — the check-up order, absent from the raw files, rebuilt from timestamps.
+- **Recipe metadata joined** (aging type, temperature setpoint, SoC/C-rate categories) per cell.
+- **Capacity-based SOH (`soh_cap`) attached to 100 % of rows** as the model target.
+
+Key columns (full dictionary in [`data_exploration.md`](data_exploration.md)):
+
+| Column | Unit | Meaning |
+|---|---|---|
+| `cell_id` (+ `pack`,`replicate`,`board`,`channel`,`param_id`) | — | Cell fingerprint `P###_#_S##_C##`. One cell = **the grouping key for all splits**. |
+| `cu_index` | — | Reconstructed check-up index (the ageing/time axis). |
+| `freq_Hz` | Hz | Test frequency (28 per spectrum, 0.05 Hz – 10 kHz). |
+| `Z_real_mOhm` / `Z_imag_mOhm` | mΩ | Compensated real Z′ / imaginary Z″ (sign convention to be locked at ECM time). |
+| `soc_nom` | % | One of the five checkpoints (10/30/50/70/90). |
+| `is_rt` | — | 1 = RT pass (~25 °C), 0 = OT pass (native temperature). |
+| `temp_degC` | °C | Actual measured temperature during the spectrum. |
+| `aging_type`, `temp_setpoint_degC` | — | Recipe metadata: why the cell ages. |
+| `soh_imp`, `z_ref_init_mOhm`, `z_ref_now_mOhm` | % / mΩ | Impedance-based SOH and its reference impedances (secondary/sanity). |
+| **`soh_cap`** | % | **Capacity-based SOH — the prediction target.** |
+
+**Dataset caveats — all resolved in Stage 0** (details in [`data_exploration.md`](data_exploration.md)):
+
+- ~~Excel truncation~~ → rebuilt from raw to Parquet (uncapped); all 228 cells recovered.
+- ~~No time/age axis~~ → `cu_index` reconstructed by sessionizing timestamps (48-hour gap threshold).
+- ~~Missing recipe metadata~~ → joined from the KIT parameter spreadsheet by `P`-code.
+- ~~Health-target undecided~~ → capacity-SOH chosen and attached (see [§7](#7-stage-2--health-model-ml)).
+
 ## 4. Pipeline Overview
 
 <img width="2064" height="2304" alt="pipeline_diagram" src="https://github.com/user-attachments/assets/e763ecfe-834e-4049-a29c-1dfb012d43f4" />
@@ -79,13 +114,13 @@ A rendered version of this pipeline is in [`pipeline_diagram.png`](pipeline_diag
 
 ## 5. Stage 0 — Data Preparation
 
-This stage exists because of the three dataset caveats above; do not skip it.
+> ✅ **COMPLETE.** Output: `data/interim/eis_labeled.parquet`. Reusable code in [`src/prep/`](src/prep/); full narrative in [`data_exploration.md`](data_exploration.md).
 
-1. **Regenerate an uncapped dataset.** Rebuild the cleaned table from the raw KIT files to Parquet (or chunked CSV) so all **228 cells / 76 recipes** are present, not the Excel-truncated 216/72. Diff against `eis_cleaned.csv` to confirm which recipes were missing.
-2. **Reconstruct the time/age axis.** Bring in the **check-up index** (and, where available, calendar date, equivalent full cycles, and Ah-throughput) per spectrum. This is what makes ageing *orderable* and RUL definable.
-3. **Join recipe metadata.** Attach, per `P`-code: aging type (calendar/cyclic/profile), temperature setpoint, SoC window, and C-rates. These become conditioning variables for the model and natural axes for drift analysis.
-4. **Choose the health target.** Decide between the file's impedance-based `SoH_pct` and the **capacity-based SOH** from each CU's full capacity test (see [§7](#7-stage-2--health-model-ml) — there is a circularity concern with predicting impedance-SOH from impedance features).
-5. **Clean labels and define grouping.** Handle `SoH_pct` > 100 % (keep as valid by default), set the per-cell grouping key, and record the RT-vs-OT pass choice for features.
+1. ✅ **Regenerate an uncapped dataset.** Rebuilt from the raw KIT files to Parquet — all **228 cells / 76 recipes** recovered (the old CSV had only 216). Empty `P000` placeholder files (12) skipped.
+2. ✅ **Reconstruct the time/age axis.** `cu_index` rebuilt by sessionizing spectrum timestamps with a **48-hour gap threshold** (verified across recipes/temperatures).
+3. ✅ **Join recipe metadata.** Aging type, temperature setpoint (A/B/C/D → 0/10/25/40 °C), SoC and C-rate categories joined per `P`-code — with an explicit guard against a one-to-many join duplication bug.
+4. ✅ **Choose the health target.** **Capacity-based SOH (`soh_cap`)** selected (non-circular), extracted from the check-up discharge capacity test (`cell_eocv2`, `cyc_condition==2 & cyc_charged==0`) and aligned to each spectrum by nearest time (100 % matched).
+5. ⬜ **Clean labels and define grouping.** Grouping key defined (`cell_id`). Remaining: `soh_cap` end-of-life noise / negatives and the CU-27 artifact — deferred into Stage 1 feature-table construction.
 
 ## 6. Stage 1 — Feature Extraction (EIS → ECM)
 
@@ -93,7 +128,7 @@ Each spectrum (one cell, one SoC, one pass, one check-up) is processed as follow
 
 **6.1 Validate first (Kramers–Kronig).** EIS assumes the system is linear, causal, stable, and time-invariant during the sweep. Low-frequency points take a long time to acquire, during which a cell can drift, invalidating the spectrum. A Kramers–Kronig consistency check is run before fitting; spectra with large systematic residuals are flagged or rejected so that bad data never reaches the model.
 
-**6.2 Fit an Equivalent Circuit Model.** A Randles-type circuit is fit to each validated spectrum. Because the chemistry is now known (NMC / graphite-SiO 18650), a concrete starting topology is recommended (see [Open Decision 1](#12-open-decisions)):
+**6.2 Fit an Equivalent Circuit Model.** A Randles-type circuit is fit to each validated spectrum. Because the chemistry is now known (NMC / graphite-SiO 18650), a concrete starting topology is recommended (see [Open Decision 1](#11-open-decisions)):
 
 ```
 L  +  R_ohm  +  ( R_ct ∥ CPE )  +  Warburg                         # baseline
@@ -120,12 +155,12 @@ Operating conditions (`SoC_pct`, `temp_degC`) are carried alongside, because imp
 
 The model maps `[ECM features + SoC + temp + (aging metadata)] → SOH` (and RUL vs. an end-of-life threshold) **with a confidence estimate**.
 
-> **Pick the health target deliberately (circularity warning).** `SoH_pct` in the file is *derived from impedance*. Extracting ECM features from the same impedance and predicting impedance-SOH is partly circular — the model would be predicting a function of its own inputs and can look deceptively accurate. The more meaningful prognostic target is the **measured capacity fade** from each check-up's full capacity test (available in the raw dataset). Recommended: **train against capacity-based SOH, use EIS-derived ECM features as predictors**; keep impedance-based `SoH_pct` as a secondary/sanity target at most.
+> **Health target — DECIDED (Stage 0): capacity-based SOH (`soh_cap`).** `soh_imp` is *derived from impedance*, and so are the ECM features, so predicting it from them is partly circular — deceptively accurate but hollow. We instead train against the **measured capacity fade** from each check-up's full charge/discharge (`cell_eocv2`), which is independent of impedance and the basis for RUL. `soh_cap` is already extracted and attached to every spectrum in `eis_labeled.parquet`; `soh_imp` is retained only as a secondary sanity check.
 
 Build order:
 
 1. **No-leakage split first** (leave-one-cell-out; additionally hold out by **aging regime** and **temperature** to test robustness across conditions).
-2. **Baseline model.** Start simple and interpretable (tree ensemble — XGBoost/LightGBM/RF — on the tabular feature table). Model family is an [open decision](#12-open-decisions).
+2. **Baseline model.** Start simple and interpretable (tree ensemble — XGBoost/LightGBM/RF — on the tabular feature table). Model family is an [open decision](#11-open-decisions).
 3. **Uncertainty.** Add prediction intervals / variance (quantile, ensemble, or a UQ-native model). Confidence is a first-class requirement.
 4. **Attribution.** Use feature importance / SHAP to confirm the model leans on physically meaningful features (`R_ct`, `ΔZ`, `R_ohm`), not artifacts.
 
@@ -135,7 +170,7 @@ Outputs must respect physics: SOH near-monotonic non-increasing over life; resis
 
 A model trained today will eventually face cells whose impedance signature has drifted beyond what it has seen. The system detects this and repairs itself rather than silently degrading.
 
-**8.1 Source the "aged" EIS.** This dataset already spans ~600 days of repeated check-ups, so the *"cell aged a few months later"* spectra are **real, not synthetic** — later-CU spectra of the same cells (or held-out late-life recipes) can serve directly as the drift test set. Synthetic generation becomes *optional*, for stress-testing beyond the observed range (see [Open Decision 3](#12-open-decisions)).
+**8.1 Source the "aged" EIS.** This dataset already spans ~600 days of repeated check-ups, so the *"cell aged a few months later"* spectra are **real, not synthetic** — later-CU spectra of the same cells (or held-out late-life recipes) can serve directly as the drift test set. Synthetic generation becomes *optional*, for stress-testing beyond the observed range (see [Open Decision 3](#11-open-decisions)).
 
 **8.2 Re-extract parameters.** New spectra pass through the same Stage 1 pipeline to produce a new ECM feature set (new `R_ohm`, `R_ct`, `ΔZ`, CPE exponent, etc.).
 
@@ -154,7 +189,7 @@ This mirrors the **Self-Healing Machine Learning** pattern: autonomously detect 
 
 ## 9. Drift Score
 
-The drift score reduces "how far have the parameters moved?" to one comparable number. The exact formula is an [open decision](#12-open-decisions); leading candidates that fit this framework:
+The drift score reduces "how far have the parameters moved?" to one comparable number. The exact formula is an [open decision](#11-open-decisions); leading candidates that fit this framework:
 
 - **Population Stability Index (PSI)** — bins a feature's distribution now vs. baseline and sums the relative-entropy contribution. Common reading: `< 0.1` no meaningful shift, `0.1–0.25` moderate, `> 0.25` significant.
 - **KL divergence** — relative entropy of the new parameter distribution against baseline (PSI is essentially a symmetrised, binned KL).
@@ -171,44 +206,23 @@ A practical design uses a **two-band threshold**: a lower band that triggers fin
 - **Plausibility checks.** Verify monotonic SOH, non-decreasing resistance, and that uncertainty grows out-of-distribution before trusting any number.
 - **Drift-loop validation.** Confirm the drift score rises on later-life / out-of-regime data and that fine-tune/retrain recovers accuracy on the shifted distribution.
 
-## 11. Proposed Repository Structure
-
-```
-.
-├── data/
-│   ├── raw/                  # original KIT export (10.35097-1969)
-│   ├── interim/              # uncapped, time-indexed, metadata-joined table
-│   └── eis_cleaned.csv       # current (truncated) working file
-├── src/
-│   ├── prep/                 # Stage 0: regenerate, time axis, metadata join, target
-│   ├── validation/           # Kramers–Kronig checks
-│   ├── ecm/                  # circuit fitting & feature extraction
-│   ├── features/             # ΔZ baselines, feature assembly
-│   ├── model/                # training, inference, uncertainty
-│   ├── drift/                # drift score, thresholds, monitors
-│   └── healing/              # fine-tune / retrain / edge export
-├── notebooks/                # exploration & analysis
-├── configs/                  # experiment configs (seeds, params)
-├── pipeline_diagram.png
-├── implementation.md         # build guide for contributors / coding assistant
-└── README.md
-```
-
-## 12. Open Decisions
+## 11. Open Decisions
 
 These choices are **not yet final** and are expected to evolve. Tracked here so the design stays honest about what is settled and what is not.
+
+> **Resolved in Stage 0:** *Health target* → capacity-based SOH (`soh_cap`). *Cell chemistry* → NMC / graphite-SiO (known). *Aged-EIS source* → the dataset's own later check-ups (real, not synthetic).
 
 1. **Which ECM circuit?** Chemistry is now **known** (NMC / graphite-SiO, LG INR18650HG2). Recommended starting point: `L + R_ohm + (R_ct ∥ CPE) + Warburg`, with an optional second `R∥CPE` for the surface-film/SEI arc if DRT shows it resolves. Still to confirm: number of arcs, Warburg type (semi-infinite vs. finite-length), and whether the SEI branch is identifiable at all SoC/temperature points.
 2. **Which ML model for SOH?** XGBoost / Random Forest / LightGBM / UQ-native alternatives. Weigh accuracy, calibrated confidence, and edge-deployability.
 3. **How is the "aged" EIS obtained?** The dataset's own later check-ups provide **real** aged spectra, so the primary path is to use held-out late-life data rather than synthesise. Still open: whether (and how) to *additionally* synthesise out-of-range spectra — parameter perturbation along ageing trends, physics-based impedance simulation, or measured-spectrum augmentation — to stress-test the drift loop.
 4. **What formula for the drift score?** PSI / KL / Mahalanobis / normalised drift / sequential detector, plus the threshold band(s) separating keep / fine-tune / retrain.
 
-## 13. Roadmap
+## 12. Roadmap
 
 The framework is explicitly **iterative**. Expected progression:
 
-0. **Data prep** — regenerate the uncapped dataset, reconstruct the time/age axis, join recipe metadata, choose the health target.
-1. Per-cell grouping and label cleaning.
+0. ✅ **Data prep (DONE)** — uncapped dataset rebuilt, time axis (`cu_index`) reconstructed, recipe metadata joined, capacity-SOH target chosen and attached → `data/interim/eis_labeled.parquet`. See [`data_exploration.md`](data_exploration.md).
+1. Per-cell grouping (done) and label cleaning (end-of-life `soh_cap` noise, CU-27 artifact — pending).
 2. K–K validation + ECM fitting; baseline feature table.
 3. First health model with uncertainty; no-leakage evaluation.
 4. Drift score implementation and threshold calibration on real later-life data.
@@ -217,7 +231,7 @@ The framework is explicitly **iterative**. Expected progression:
 
 Every stage above is a candidate for improvement; the architecture is meant to be refined repeatedly rather than frozen after a first pass.
 
-## 14. References
+## 13. References
 
 - KIT comprehensive battery aging dataset (*Scientific Data*, 2024) — <https://www.nature.com/articles/s41597-024-03831-x>
 - Dataset record (RADAR4KIT) — <https://radar.kit.edu/radar/en/dataset/kww7jv8ajuvchcah>
