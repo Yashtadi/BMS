@@ -1,0 +1,15 @@
+@"
+# Data - never commit, regenerate via build_dataset.py
+data/
+
+# Python
+__pycache__/
+*.pyc
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS/editor
+.DS_Store
+.vscode/
+"@ | Out-File -FilePath .gitignore -Encoding utf8
