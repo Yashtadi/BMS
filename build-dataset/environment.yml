@@ -1,0 +1,20 @@
+# Conda environment for the BMS project.
+# Create it with:   conda env create -f environment.yml
+# Then activate:     conda activate bms
+# Register kernel:   python -m ipykernel install --user --name bms
+name: bms
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - scipy
+  - matplotlib
+  - jupyter
+  - ipykernel
+  - pyarrow          # Parquet read/write (uncapped, typed storage)
+  - openpyxl         # read the KIT metadata .xlsx files
+  - pip
+  - pip:
+      - impedance    # EIS / equivalent-circuit fitting (Stage 1)

@@ -1,0 +1,21 @@
+# ---- Data (never commit large data files) ----
+data/
+*.csv
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# ---- Conda / virtual envs ----
+.conda/
+env/
+venv/
+*.conda
+
+# ---- OS / editor cruft ----
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
