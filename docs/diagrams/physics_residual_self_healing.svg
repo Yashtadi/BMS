@@ -1,0 +1,59 @@
+<svg width="680" height="446" viewBox="0 0 680 446" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>Self-healing drift adaptation with physics-residual split</title>
+<desc>When drift is detected, mild drift triggers a cheap refit of the physics term only, while severe drift triggers a cloud retrain of the correction network. Both paths converge into exporting a lightweight model for edge deployment.</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#333" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+</defs>
+<style>
+text { font-family: Arial, sans-serif; fill: #1a1a1a; }
+.th { font-size: 14px; font-weight: 600; }
+.ts { font-size: 12px; fill: #444; }
+</style>
+
+<rect x="240" y="30" width="200" height="70" rx="12" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+<text class="ts" x="340" y="55" text-anchor="middle" dominant-baseline="central">Drift score</text>
+<text class="ts" x="340" y="75" text-anchor="middle" dominant-baseline="central">at or above threshold?</text>
+
+<path d="M240 65 L140 65 L140 150" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text class="ts" x="190" y="50" text-anchor="middle">NO</text>
+
+<path d="M440 65 L560 65 L560 120" fill="none" stroke="#555" stroke-width="1.5"/>
+<path d="M560 120 L560 135 L342 135 L342 150" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M560 120 L560 135 L537 135 L537 150" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text class="ts" x="500" y="50" text-anchor="middle">YES</text>
+
+<g>
+<rect x="40" y="150" width="200" height="44" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="th" x="140" y="172" text-anchor="middle" dominant-baseline="central">Keep current model</text>
+</g>
+
+<g>
+<rect x="260" y="150" width="165" height="56" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+<text class="th" x="342" y="168" text-anchor="middle" dominant-baseline="central">Mild drift</text>
+<text class="ts" x="342" y="188" text-anchor="middle" dominant-baseline="central">Refit f_physics only</text>
+</g>
+
+<g>
+<rect x="445" y="150" width="185" height="56" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.5"/>
+<text class="th" x="537" y="168" text-anchor="middle" dominant-baseline="central">Severe drift</text>
+<text class="ts" x="537" y="188" text-anchor="middle" dominant-baseline="central">Retrain g_NN (cloud)</text>
+</g>
+
+<path d="M140 194 L140 235 L250 235 L250 260" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M342 206 L342 235 L330 235 L330 260" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M537 206 L537 235 L430 235 L430 260" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<g>
+<rect x="190" y="260" width="300" height="44" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text class="th" x="340" y="282" text-anchor="middle" dominant-baseline="central">Export lightweight model</text>
+</g>
+
+<line x1="340" y1="304" x2="340" y2="350" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<g>
+<rect x="190" y="350" width="300" height="56" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="th" x="340" y="368" text-anchor="middle" dominant-baseline="central">Deploy to edge device</text>
+<text class="ts" x="340" y="388" text-anchor="middle" dominant-baseline="central">Replaces previous model</text>
+</g>
+
+</svg>

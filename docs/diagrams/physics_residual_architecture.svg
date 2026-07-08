@@ -1,0 +1,58 @@
+<svg width="680" height="476" viewBox="0 0 680 476" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>Physics-residual SoH model architecture</title>
+<desc>Flow from EIS spectra and ECM fitting through a feature table that splits into a physics term based on deltaZ and a correction neural network based on ECM parameters, which combine into the final SoH and RUL output.</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#333" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+</defs>
+<style>
+text { font-family: Arial, sans-serif; fill: #1a1a1a; }
+.th { font-size: 14px; font-weight: 600; }
+.ts { font-size: 12px; fill: #444; }
+.arr { stroke: #555; stroke-width: 1.5; }
+</style>
+
+<g>
+<rect x="190" y="40" width="300" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="th" x="340" y="60" text-anchor="middle" dominant-baseline="central">EIS spectra + ECM fit</text>
+<text class="ts" x="340" y="78" text-anchor="middle" dominant-baseline="central">R_ohm, R_ct, CPE, Warburg, deltaZ</text>
+</g>
+
+<line x1="340" y1="96" x2="340" y2="130" class="arr" marker-end="url(#arrow)"/>
+
+<g>
+<rect x="190" y="130" width="300" height="44" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text class="th" x="340" y="152" text-anchor="middle" dominant-baseline="central">Feature table (orthogonalized)</text>
+</g>
+
+<path d="M340 174 L340 190 L190 190 L190 210" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M340 174 L340 190 L490 190 L490 210" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<g>
+<rect x="60" y="210" width="260" height="56" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+<text class="th" x="190" y="228" text-anchor="middle" dominant-baseline="central">Physics term f(deltaZ)</text>
+<text class="ts" x="190" y="248" text-anchor="middle" dominant-baseline="central">Parametric decay law</text>
+</g>
+
+<g>
+<rect x="360" y="210" width="260" height="56" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.5"/>
+<text class="th" x="490" y="228" text-anchor="middle" dominant-baseline="central">Correction network g(...)</text>
+<text class="ts" x="490" y="248" text-anchor="middle" dominant-baseline="central">R_ct, CPE, SoC, temperature</text>
+</g>
+
+<path d="M190 266 L190 285 L310 285 L310 300" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M490 266 L490 285 L370 285 L370 300" fill="none" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<g>
+<rect x="190" y="300" width="300" height="44" rx="8" fill="#FBEAF0" stroke="#993556" stroke-width="0.5"/>
+<text class="th" x="340" y="322" text-anchor="middle" dominant-baseline="central">Combine: SoH = f + g</text>
+</g>
+
+<line x1="340" y1="344" x2="340" y2="380" class="arr" marker-end="url(#arrow)"/>
+
+<g>
+<rect x="190" y="380" width="300" height="56" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="th" x="340" y="400" text-anchor="middle" dominant-baseline="central">Output: SoH / RUL</text>
+<text class="ts" x="340" y="418" text-anchor="middle" dominant-baseline="central">+ confidence estimate</text>
+</g>
+
+</svg>
