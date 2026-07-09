@@ -6,8 +6,7 @@ interpretable circuit parameters (R_ohm, R_sf, R_ct, CPE terms, Warburg σ). Thi
 project's pipeline, sitting between Stage 0 (`data_exploration.md`) and the deltaZ / Stage 2
 physics-residual model (`deltaz.md`, `physics_residual_model.md`).
 
-Code: `fit_ecm.py`. Companion exploration tools: `explore_ecm.py`,
-`compare_specific_spectra.py`.
+Code: `fit_ecm.py`. 
 
 ---
 
