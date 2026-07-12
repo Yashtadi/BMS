@@ -17,12 +17,13 @@ and extract cell_eisv2.zip and cell_eocv2.zip -- see CONTRIBUTING.md, Part 2.3.
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent   # repo root (this file is in build-dataset/)
 sys.path.insert(0, str(ROOT))
 
 from src.prep.load_eis import load_all_cells
 from src.prep.metadata import build_enriched_table
 from src.prep.capacity import load_capacity_labels, attach_capacity_labels
+from src.prep.labels import clip_soh_cap
 
 DS = ROOT / "data" / "raw" / "10.35097-1969" / "10.35097-1969" / "data" / "dataset"
 INTERIM = ROOT / "data" / "interim"
@@ -66,6 +67,7 @@ def main() -> None:
     print("[3/3] Extracting capacity-SOH and aligning by time ...")
     caps = load_capacity_labels(DS / "cell_eocv2")
     labeled = attach_capacity_labels(enriched, caps)
+    labeled = clip_soh_cap(labeled)  # soh_cap can't be physically negative; see src/prep/labels.py
     labeled.to_parquet(INTERIM / "eis_labeled.parquet", index=False)
 
     # --- verification -----------------------------------------------------
