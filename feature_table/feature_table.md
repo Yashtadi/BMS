@@ -1,8 +1,7 @@
 # Feature Table — build, filter, and orthogonalize
 
 This document covers the three scripts that turn your raw ECM and deltaZ outputs into the final,
-orthogonalized feature table used by downstream models (e.g. `fit_monotonic_gbm.py`, documented
-separately in `gbm.md`). Read `physics_residual_model.md` first for the concepts behind `deltaZ`,
+orthogonalized feature table used by downstream models ). Read `physics_residual_model.md` first for the concepts behind `deltaZ`,
 the ECM parameters, and why orthogonalization is needed at all (Part 2).
 
 All commands below use forward slashes in paths, which work on Windows, macOS, and Linux alike, and
@@ -135,10 +134,6 @@ chosen `deltaZ` column — regressing each ECM parameter on `deltaZ` and keeping
 derived from the same underlying spectrum and are often strongly collinear — without this step, a
 downstream model has no principled way to know which feature deserves credit for a given prediction.
 
-**This replaces `fit_f_physics.py`'s VIF/orthogonalization step**, without also fitting or comparing
-`f_physics` candidate curve forms — use this when your downstream model doesn't use `f_physics` at all
-(e.g. a GBM that takes `deltaZ` and the ECM features together, rather than a separate physics term).
-
 ```python
 def orthogonalize(df, target_col, against_col):
     slope, intercept = np.polyfit(x, y, 1)
@@ -152,7 +147,7 @@ it from `--deltaz-col`, then keeps only the leftover — the `_orth` columns (`R
 **`--deltaz-col` matters — it must match whatever deltaZ column your downstream model actually treats
 as primary.** Orthogonalizing against the wrong column leaves the ECM features still partly collinear
 with the one your model actually uses, undermining the point of the step. Default is
-`deltaz_integrated_abs` (matches `fit_monotonic_gbm.py`'s `DELTAZ_COL`) — change it explicitly if your
+`deltaz_integrated_abs` — change it explicitly if your
 downstream model uses a different summary statistic.
 
 ### How to run
