@@ -14,7 +14,14 @@ feature-table pipeline (`build_feature_table.py` → `filter_stage2_features.py`
 ## Workflow overview
 
 ```
-                  stage2_features_filtered_orthogonalized.parquet
+      raw EIS + capacity data
+                |
+                v
+         feature_table/
+   build -> filter -> orthogonalize
+                |
+                v
+  stage2_features_filtered_orthogonalized.parquet
                                      |
         ┌────────────────────────────┼────────────────────────────┐
         v                            v                             v
@@ -23,7 +30,26 @@ feature-table pipeline (`build_feature_table.py` → `filter_stage2_features.py`
                                                                  + adapt (SHML)
 ```
 
-### 1. `model_choice/` — pick the base model
+### 1. `feature_table/` — build the feature table
+
+Turns the raw ECM fits, deltaZ features, and SoH labels into the single
+orthogonalized table every downstream stage consumes.
+
+- `build_feature_table.py` — merges `ecm_features_v2` + `deltaz_features` +
+  `soh_cap` (and optionally the per-frequency `deltaz_wide`) into one row per
+  spectrum.
+- `filter_stage2_features.py` — drops KK-validation failures and implausible
+  one-arc fits, and reports where the dropped rows concentrate.
+- `orthogonalize_features.py` — VIF check, then orthogonalizes the ECM
+  parameters against `deltaz_integrated_abs` so downstream models can attribute
+  credit cleanly.
+- `README_build_feature_table.md`, `README_filter_stage2_features.md`,
+  `README_orthogonalize_features.md` — details, including every deltaZ attribute.
+
+Output: `data/interim/stage2_features_filtered_orthogonalized.parquet` — the
+input to every stage below.
+
+### 2. `model_choice/` — pick the base model
 
 Compares LightGBM, XGBoost, CatBoost, and their equal-weight ensemble on the
 same early-life split, and documents why **CatBoost** was chosen (lowest
@@ -33,7 +59,7 @@ later-life MAE/RMSE — the regime that matters for a frozen model).
   cell-grouped split and reports per-split MAE/RMSE.
 - `choice.md` — the decision and its justification, from the actual numbers.
 
-### 2. `catboost/` — tune the chosen model
+### 3. `catboost/` — tune the chosen model
 
 Searches CatBoost hyperparameters on the early-life data.
 
@@ -46,7 +72,7 @@ Searches CatBoost hyperparameters on the early-life data.
 Key output consumed downstream:
 `..._catboost_predictions.parquet` and `..._catboost_best_params.json`.
 
-### 3. `shml/` — diagnose drift and adapt (self-healing)
+### 4. `shml/` — diagnose drift and adapt (self-healing)
 
 Watches the frozen model's error drift across later check-ups, attributes it to
 ECM mechanisms, and (as future work) adapts the model.
@@ -65,19 +91,29 @@ ECM mechanisms, and (as future work) adapts the model.
 ## End-to-end run order
 
 ```bash
-# 0. (prerequisite) build the feature table -> stage2_features_filtered_orthogonalized.parquet
+# 1. build the feature table (merge -> filter -> orthogonalize)
+python feature_table/build_feature_table.py \
+    --ecm data/interim/ecm_features_v2.parquet \
+    --deltaz data/interim/deltaz_features.parquet \
+    --labeled data/interim/eis_labeled.parquet \
+    --out data/interim/stage2_features.parquet
+python feature_table/filter_stage2_features.py \
+    --file data/interim/stage2_features.parquet
+python feature_table/orthogonalize_features.py \
+    --file data/interim/stage2_features_filtered.parquet
+# -> data/interim/stage2_features_filtered_orthogonalized.parquet
 
-# 1. pick the model
+# 2. pick the model
 python model_choice/fit_earlylife_ensemble.py \
     --file data/interim/stage2_features_filtered_orthogonalized.parquet \
     --output-dir model_choice/results
 
-# 2. tune CatBoost (produces predictions + best_params consumed by SHML)
+# 3. tune CatBoost (produces predictions + best_params consumed by SHML)
 python catboost/tune_earlylife_catboost.py \
     --file data/interim/stage2_features_filtered_orthogonalized.parquet \
     --n-trials 50 --output-dir catboost/results
 
-# 3. SHML diagnosis + recommendation (trains nothing)
+# 4. SHML diagnosis + recommendation (trains nothing)
 python shml/shml_from_artifacts.py \
     --pred-file  catboost/results/stage2_features_filtered_orthogonalized_catboost_predictions.parquet \
     --ecm-file   data/interim/stage2_features_filtered_orthogonalized.parquet \
