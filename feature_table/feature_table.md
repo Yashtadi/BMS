@@ -186,18 +186,3 @@ Part 3).
 
 ---
 
-## Part 5 — Decisions log
-
-| # | Decision | Why | Reversible? |
-|---|---|---|---|
-| 1 | `orthogonalize_features.py` split out from `fit_f_physics.py` | Keeps feature-prep separate from any specific downstream model's curve-fitting needs -- reusable across models | yes |
-| 2 | Default orthogonalization target is `deltaz_integrated_abs`, not `deltaz_mean_all` | Must match whichever deltaZ column the downstream model treats as primary | yes -- pass `--deltaz-col` |
-| 3 | Filtering drops rows rather than downweighting them | Validated safe on this dataset: 95.7% retention, no cells lost, `soh_cap` range preserved, drops NOT concentrated at late life | yes -- revisit if the concentration check ever looks different |
-| 4 | `--deltaz-wide` kept optional, not default | Only needed for per-frequency comparisons, not standard feature-table construction | yes |
-
----
-
-## Part 6 — What's next
-
-Once you have `stage2_features_filtered_orthogonalized.parquet`, see `gbm.md` for the model itself
-(`fit_monotonic_gbm.py`) — training, results, and how to run it.
