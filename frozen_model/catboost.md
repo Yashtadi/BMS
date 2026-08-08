@@ -92,20 +92,20 @@ SHML scripts.
 
 ## Usage
 
-The script lives in the `catboost/` folder. Run from the repo root.
+The script lives in the `frozen_model/` folder. Run from the repo root.
 
 ```bash
-python catboost/tune_earlylife_catboost.py \
+python frozen_model/tune_earlylife_catboost.py \
     --file data/interim/stage2_features_filtered_orthogonalized.parquet \
-    --n-trials 50 --output-dir catboost/results
+    --n-trials 50 --output-dir frozen_model/results
 ```
 
 Faster search (fewer trials, lower iteration cap):
 
 ```bash
-python catboost/tune_earlylife_catboost.py \
+python frozen_model/tune_earlylife_catboost.py \
     --file data/interim/stage2_features_filtered_orthogonalized.parquet \
-    --n-trials 20 --max-iterations 600 --output-dir catboost/results
+    --n-trials 20 --max-iterations 600 --output-dir frozen_model/results
 ```
 
 ## Dependencies

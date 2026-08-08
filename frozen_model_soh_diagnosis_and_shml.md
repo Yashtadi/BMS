@@ -25,7 +25,7 @@ feature-table pipeline (`build_feature_table.py` → `filter_stage2_features.py`
                                      |
         ┌────────────────────────────┼────────────────────────────┐
         v                            v                             v
-  model_choice/                 catboost/                        shml/
+  model_choice/               frozen_model/                      shml/
   pick the model                tune it                          diagnose drift
                                                                  + adapt (SHML)
 ```
@@ -59,7 +59,7 @@ later-life MAE/RMSE — the regime that matters for a frozen model).
   cell-grouped split and reports per-split MAE/RMSE.
 - `choice.md` — the decision and its justification, from the actual numbers.
 
-### 3. `catboost/` — tune the chosen model
+### 3. `frozen_model/` — tune the chosen model
 
 Searches CatBoost hyperparameters on the early-life data.
 
@@ -109,15 +109,15 @@ python model_choice/fit_earlylife_ensemble.py \
     --output-dir model_choice/results
 
 # 3. tune CatBoost (produces predictions + best_params consumed by SHML)
-python catboost/tune_earlylife_catboost.py \
+python frozen_model/tune_earlylife_catboost.py \
     --file data/interim/stage2_features_filtered_orthogonalized.parquet \
-    --n-trials 50 --output-dir catboost/results
+    --n-trials 50 --output-dir frozen_model/results
 
 # 4. SHML diagnosis + recommendation (trains nothing)
 python shml/shml_from_artifacts.py \
-    --pred-file  catboost/results/stage2_features_filtered_orthogonalized_catboost_predictions.parquet \
+    --pred-file  frozen_model/results/stage2_features_filtered_orthogonalized_catboost_predictions.parquet \
     --ecm-file   data/interim/stage2_features_filtered_orthogonalized.parquet \
-    --params-file catboost/results/stage2_features_filtered_orthogonalized_catboost_best_params.json \
+    --params-file frozen_model/results/stage2_features_filtered_orthogonalized_catboost_best_params.json \
     --abserr-col abserr_tuned --error-threshold 3.6 --exclude-ohmic \
     --output-dir shml/results
 ```
