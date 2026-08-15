@@ -6,7 +6,7 @@ adaptation loop, and the full results across all configurations.
 
 ---
 
-## 0. Summary
+## 0. summary
 
 We train a battery State-of-Health (SoH) model on early-life data, freeze it,
 and watch its error grow as cells age. We diagnose *which physical mechanism*
@@ -17,7 +17,10 @@ boost strengths, and 2 frozen-model hyperparameter sets, the answer is
 consistent: **retraining on recent data heals the drift substantially, but
 diagnosis-conditioned reweighting never beats plain retraining — at best it
 breaks even, and stronger boosting monotonically worsens it.** This is a
-rigorous negative result. 
+rigorous negative result. The project's positive contribution is the *diagnosis*
+(a mechanism-transition story and a real-part/imaginary-part feature blind spot),
+not the adaptation.
+
 ---
 
 ## 1. Background and motivation
