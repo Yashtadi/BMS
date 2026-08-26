@@ -1,8 +1,7 @@
 """
 shml_efficiency_test.py — four-policy efficiency comparison for SHML adaptation.
 
-This is the "is the stronger paper real?" probe. The reweighting experiment
-(shml_reweight_loop_v2.py) answered a narrow accuracy question and found
+The reweighting experiment (shml_reweight_loop_v2.py) answered a narrow accuracy question and found
 diagnosis-conditioned boosting does not beat generic adaptation. This script
 reframes the comparison around DEPLOYMENT EFFICIENCY, which is where a positive
 result may still exist:
@@ -154,6 +153,28 @@ def weights_single(dominant_feature, boost):
     return [boost if f == dominant_feature else 1.0 for f in FEATURES]
 
 
+def weights_shared(contrib_pct, boost, exclude_ohmic=False):
+    """
+    Contribution-weighted boost: every feature is boosted in proportion to its
+    diagnosed contribution share, matching shml_reweight_loop_v2.py.
+        w_f = 1 + (boost - 1) * share_f
+    A feature with 100% share gets the full boost; smaller contributors get
+    proportionally less. When exclude_ohmic is set, the ohmic feature is left
+    unboosted (weight 1.0) so only genuine aging mechanisms are emphasised.
+    """
+    w = []
+    for f in FEATURES:
+        share = 0.0
+        for cause, feat in CAUSE_TO_FEATURE.items():
+            if feat != f or cause not in contrib_pct:
+                continue
+            if exclude_ohmic and cause == OHMIC:
+                continue
+            share = max(share, contrib_pct[cause] / 100.0)
+        w.append(1.0 + (boost - 1.0) * share if share > 0 else 1.0)
+    return w
+
+
 def first_drift_cu(mae_file, threshold, baseline_max_cu, mae_col="mae_tuned"):
     df = pd.read_csv(mae_file) if str(mae_file).endswith(".csv") else pd.read_parquet(mae_file)
     if mae_col not in df.columns:
@@ -239,13 +260,18 @@ def main():
         window_starts = [int(x) for x in args.window_starts.split(",")]
     seeds = [int(x) for x in args.seeds.split(",")]
 
-    # policies: frozen is the floor; the other three adapt only on drift.
-    POLICIES = ["frozen", "full_retrain", "generic_adapt", "diagnosis_adapt"]
+    # policies: frozen is the floor; the rest adapt only on drift.
+    # diagnosis_single boosts the one dominant feature; diagnosis_shared boosts
+    # all features by their contribution share.
+    POLICIES = ["frozen", "full_retrain", "generic_adapt",
+                "diagnosis_single", "diagnosis_shared"]
 
     records = []
     for seed in seeds:
         frozen = train_frozen(data, args.baseline_max_cu, params, seed, max_iter=args.max_iter)
         w_single = weights_single(dominant_feature, args.boost)
+        w_shared = weights_shared(rec.get("contribution_pct_full", {}),
+                                  args.boost, exclude_ohmic=args.exclude_ohmic)
 
         for start in window_starts:
             adapt_cus = range(start, start + args.window_size)
@@ -286,9 +312,13 @@ def main():
                 elif policy == "generic_adapt":
                     m, secs, nrows = _fit(adapt_win, params, seed,
                                           init_model=frozen, max_iter=args.max_iter)
-                else:  # diagnosis_adapt
+                elif policy == "diagnosis_single":
                     m, secs, nrows = _fit(adapt_win, params, seed,
                                           feature_weights=w_single,
+                                          init_model=frozen, max_iter=args.max_iter)
+                else:  # diagnosis_shared
+                    m, secs, nrows = _fit(adapt_win, params, seed,
+                                          feature_weights=w_shared,
                                           init_model=frozen, max_iter=args.max_iter)
 
                 cand = mae(m.predict(gate_win[FEATURES]), gate_win["soh_cap"])
@@ -306,10 +336,10 @@ def main():
 
     # ---- per-policy aggregates: the efficiency comparison ------------------
     print("\n" + "=" * 92)
-    print(f"FOUR-POLICY EFFICIENCY COMPARISON  ({len(seeds)} seeds x "
+    print(f"FIVE-POLICY EFFICIENCY COMPARISON  ({len(seeds)} seeds x "
           f"{df['window_start'].nunique()} windows)")
     print("=" * 92)
-    print(f"{'policy':>16}  {'gate MAE':>10}  {'95% CI':>8}  "
+    print(f"{'policy':>18}  {'gate MAE':>10}  {'95% CI':>8}  "
           f"{'adapt events':>12}  {'rows/adapt':>11}  {'sec/adapt':>10}  {'total sec':>10}")
 
     summary = []
@@ -321,7 +351,7 @@ def main():
         rows_per = adapted["rows_used"].mean() if len(adapted) else 0.0
         sec_per = adapted["train_seconds"].mean() if len(adapted) else 0.0
         total_sec = sub["train_seconds"].sum()
-        print(f"{policy:>16}  {m:>10.3f}  {h:>8.3f}  {events:>12d}  "
+        print(f"{policy:>18}  {m:>10.3f}  {h:>8.3f}  {events:>12d}  "
               f"{rows_per:>11.0f}  {sec_per:>10.3f}  {total_sec:>10.2f}")
         summary.append({"policy": policy, "gate_mae": m, "gate_mae_ci95": h,
                         "adapt_events": events, "rows_per_adapt": rows_per,
@@ -331,20 +361,19 @@ def main():
 
     # ---- the efficiency verdict -------------------------------------------
     print("\n" + "=" * 92)
-    print("VERDICT — does diagnosis-guided adaptation match accuracy at lower cost?")
+    print("VERDICT")
     print("=" * 92)
     full = sdf.loc["full_retrain"]
-    diag = sdf.loc["diagnosis_adapt"]
     gen = sdf.loc["generic_adapt"]
 
-    # Accuracy vs full retrain. "As good or better" is what the efficiency
-    # claim needs — beating full retrain counts as success, not failure.
-    acc_gap = diag["gate_mae"] - full["gate_mae"]              # negative = diag better
-    ci_sum = diag["gate_mae_ci95"] + full["gate_mae_ci95"]
-    as_good = acc_gap <= ci_sum          # not significantly worse than full retrain
-    strictly_better = acc_gap < -ci_sum  # significantly better than full retrain
-    cheaper_data = diag["rows_per_adapt"] < full["rows_per_adapt"]
-    cheaper_time = diag["total_train_sec"] < full["total_train_sec"]
+    # Efficiency axis: generic warm-start adaptation (the cheapest adaptive
+    # policy) vs full retrain. "As good or better" is what the claim needs.
+    acc_gap = gen["gate_mae"] - full["gate_mae"]              # negative = adapt better
+    ci_sum = gen["gate_mae_ci95"] + full["gate_mae_ci95"]
+    as_good = acc_gap <= ci_sum
+    strictly_better = acc_gap < -ci_sum
+    cheaper_data = gen["rows_per_adapt"] < full["rows_per_adapt"]
+    cheaper_time = gen["total_train_sec"] < full["total_train_sec"]
 
     if strictly_better:
         acc_label = "BETTER than full retrain"
@@ -353,19 +382,26 @@ def main():
     else:
         acc_label = "WORSE than full retrain"
 
-    print("  Adaptation (warm-start) vs FULL retrain — the efficiency axis:")
+    print("  Warm-start adaptation vs FULL retrain — the efficiency axis:")
     print(f"    accuracy gap = {acc_gap:+.3f} MAE  ({acc_label})")
-    print(f"    data per adapt: {diag['rows_per_adapt']:.0f} vs {full['rows_per_adapt']:.0f} rows  "
+    print(f"    data per adapt: {gen['rows_per_adapt']:.0f} vs {full['rows_per_adapt']:.0f} rows  "
           f"({'less' if cheaper_data else 'not less'})")
-    print(f"    total compute:  {diag['total_train_sec']:.2f}s vs {full['total_train_sec']:.2f}s  "
+    print(f"    total compute:  {gen['total_train_sec']:.2f}s vs {full['total_train_sec']:.2f}s  "
           f"({'less' if cheaper_time else 'not less'})")
     print()
-    diag_vs_gen = diag["gate_mae"] - gen["gate_mae"]           # negative = diag better
-    gen_ci = diag["gate_mae_ci95"] + gen["gate_mae_ci95"]
-    diag_helps = diag_vs_gen < -gen_ci
+
+    # Does either diagnosis policy add value over generic adaptation?
     print("  Diagnosis-guided vs GENERIC adaptation — does the diagnosis add value?")
-    print(f"    accuracy gap = {diag_vs_gen:+.3f} MAE  "
-          f"({'diagnosis significantly better' if diag_helps else 'no meaningful difference'})")
+    any_diag_helps = False
+    for dpol, label in [("diagnosis_single", "single boost"),
+                        ("diagnosis_shared", "shared boost")]:
+        d = sdf.loc[dpol]
+        gap = d["gate_mae"] - gen["gate_mae"]                 # negative = diag better
+        gci = d["gate_mae_ci95"] + gen["gate_mae_ci95"]
+        helps = gap < -gci
+        any_diag_helps = any_diag_helps or helps
+        verdict = "significantly better" if helps else "no meaningful difference"
+        print(f"    {label:>13}: {gap:+.4f} MAE vs generic  ({verdict})")
     print()
 
     # Two independent claims, reported separately and honestly.
@@ -377,13 +413,12 @@ def main():
         print("  => EFFICIENCY CLAIM NOT SUPPORTED here: adaptation does not reach")
         print("     full-retrain accuracy at a real cost saving in this run.")
     print()
-    if diag_helps:
-        print("  => The DIAGNOSIS adds value over generic adaptation. Investigate further.")
+    if any_diag_helps:
+        print("  => A DIAGNOSIS policy adds value over generic adaptation. Investigate further.")
     else:
-        print("  => The DIAGNOSIS does NOT add value over generic adaptation — the")
-        print("     efficiency win (if any) belongs to warm-start adaptation itself,")
-        print("     not to the diagnosis. Report this honestly; don't credit the")
-        print("     diagnosis for the adaptation's efficiency.")
+        print("  => NEITHER diagnosis policy (single or shared) adds value over generic")
+        print("     adaptation — the efficiency win belongs to warm-start adaptation")
+        print("     itself, not to the diagnosis. Report this honestly.")
     print("\n  (One dataset, one frozen-model family — this probes whether the")
     print("   efficiency framing is worth pursuing, not a standalone conference result.)")
 
